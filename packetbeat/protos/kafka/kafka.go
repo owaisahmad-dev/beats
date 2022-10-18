@@ -36,8 +36,11 @@ type kafkaMessage struct {
 	size          uint32
 	clientId      uint16
 
-	topics   []string
-	messages []string
+	isError bool
+
+	topics        []string
+	messages      []string
+	errorMessages []string
 
 	raw []byte
 }
@@ -106,7 +109,7 @@ func New(
 
 func (kafka *kafkaPlugin) init(results protos.Reporter, watcher procs.ProcessesWatcher, config *kafkaConfig) error {
 	kafka.setFromConfig(config)
-	// kafka.handleKafka =
+	kafka.handleKafka = handleKafkaMessage
 	kafka.results = results
 	kafka.watcher = watcher
 
@@ -217,9 +220,11 @@ func (kafka *kafkaPlugin) kafkaMessageParser(s *kafkaStream) (bool, bool) {
 		msg.clientId = uint16(s.parseInt16(&s.data))
 
 		switch msg.apiKey {
+		case 0:
+			ok, complete := s.parseProduceRequest(&s.data, msg.apiVersion)
+			return ok, complete
 		case 1:
-			ok, complete, topics := s.parseFetchRequest(&s.data, msg.apiVersion)
-			msg.topics = topics
+			ok, complete := s.parseFetchRequest(&s.data, msg.apiVersion)
 			return ok, complete
 		default:
 			logp.Debug("kafka_detailed", "Kafka unknown message key = %d", msg.apiKey)
@@ -229,11 +234,12 @@ func (kafka *kafkaPlugin) kafkaMessageParser(s *kafkaStream) (bool, bool) {
 	} else {
 		msg.correlationId = uint32(s.parseInt32(&s.data))
 		switch msg.apiKey {
-		case 1:
-			ok, complete, messages := s.parseFetchResponse(&s.data, s.message.apiVersion)
-			msg.messages = messages
+		case 0:
+			ok, complete := s.parseProduceResponse(&s.data, s.message.apiVersion)
 			return ok, complete
-
+		case 1:
+			ok, complete := s.parseFetchResponse(&s.data, s.message.apiVersion)
+			return ok, complete
 		default:
 			logp.Debug("kafka_detailed", "Kafka unknown message key = %d", msg.apiKey)
 			return false, false
@@ -281,6 +287,12 @@ func (kafka *kafkaPlugin) receivedKafkaRequest(msg *kafkaMessage) {
 		trans.kafka["clientId"] = msg.clientId
 	}
 
+	if msg.apiKey == 0 {
+		trans.kafka["clientId"] = msg.clientId
+		trans.kafka["topics"] = msg.topics
+		trans.kafka["messages"] = msg.messages
+	}
+
 	trans.requestRaw = string(msg.raw)
 }
 
@@ -299,11 +311,10 @@ func (kafka *kafkaPlugin) receivedKafkaResponse(msg *kafkaMessage) {
 	}
 
 	// TODO: fix me
-	trans.isError = false
+	trans.isError = msg.isError
 
 	if trans.isError {
-		trans.kafka["error_code"] = 00
-		trans.kafka["error_message"] = "FIXME"
+		trans.kafka["error_messages"] = msg.errorMessages
 	}
 
 	// TODO: fill the transaction.kafka with important data
