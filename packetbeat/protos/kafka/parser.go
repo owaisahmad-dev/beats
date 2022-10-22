@@ -53,6 +53,9 @@ func (p *kafkaStream) parseUnsignedVarInt(bytes *[]byte) int64 {
 
 func (p *kafkaStream) parseString(bytes *[]byte) string {
 	size := p.parseInt16(bytes)
+	if size < 0 {
+		return ""
+	}
 	stringVal := (*bytes)[p.currentOffset : p.currentOffset+int(size)]
 	p.currentOffset += int(size)
 
@@ -80,21 +83,36 @@ func (p *kafkaStream) parseUUID(bytes *[]byte) string {
 	return parsedUUID.String()
 }
 
-func (p *kafkaStream) parseFetchResponse(message *[]byte, version uint16) (bool, bool, []string) {
-	// FIXME
-	var messages []string
-	if version == 11 {
-		// skip fields
-
-		p.currentOffset += 10
-
-		numberOfResponses := p.parseInt32(message)
-
-		for i := 0; i < int(numberOfResponses); i++ {
-			messages = append(messages, p.parseTopicResponse(message, version)...)
-		}
+func (p *kafkaStream) parseFetchResponse(message *[]byte, version uint16) (bool, bool) {
+	if version >= 1 {
+		p.parseInt32(message)
 	}
-	return true, true, messages
+
+	if version >= 7 {
+		var ec ErrorCode = ErrorCode(p.parseInt16(message))
+		var errorMessage string
+		var isError bool = false
+		if ec != 0 {
+			if ec == -1 {
+				errorMessage = "UNKNOWN_SERVER_ERROR"
+			}
+			errorMessage = ec.String()
+		}
+		p.parseInt32(message)
+		p.message.isError = isError
+		p.message.errorMessages = []string{errorMessage}
+	}
+
+	var messages []string
+
+	numberOfResponses := p.parseInt32(message)
+
+	for i := 0; i < int(numberOfResponses); i++ {
+		messages = append(messages, p.parseFetchTopicResponse(message, version)...)
+	}
+	p.message.messages = messages
+
+	return true, true
 }
 
 func (p *kafkaStream) parseFetchResponsePartitions(message *[]byte, version uint16) []string {
@@ -180,14 +198,14 @@ func (p *kafkaStream) parseRecordBatch(message *[]byte, version uint16) []string
 	return messages
 }
 
-func (p *kafkaStream) parseTopicResponse(message *[]byte, version uint16) []string {
-	var topicName = p.parseTopic(message, version)
+func (p *kafkaStream) parseFetchTopicResponse(message *[]byte, version uint16) []string {
+	var topicName = p.parseFetchTopic(message, version)
 	fmt.Println("Topic Name:", topicName)
 	return p.parseFetchResponsePartitions(message, version)
 }
 
-func (p *kafkaStream) parseTopicRequest(message *[]byte, version uint16) string {
-	var topicName = p.parseTopic(message, version)
+func (p *kafkaStream) parseFetchTopicRequest(message *[]byte, version uint16) string {
+	var topicName = p.parseFetchTopic(message, version)
 	fmt.Println("Topic Name:", topicName)
 	p.skipFetchRequestPartitions(message, version)
 	return topicName
@@ -212,7 +230,18 @@ func (p *kafkaStream) skipFetchRequestPartitions(message *[]byte, version uint16
 
 }
 
-func (p *kafkaStream) parseTopic(message *[]byte, version uint16) string {
+func (p *kafkaStream) parseProduceRequestPartitions(message *[]byte, version uint16) []string {
+	numberOfPartitions := p.parseInt32(message)
+	var messages []string
+	for i := 0; i < int(numberOfPartitions); i++ {
+		p.parseInt32(message)
+		msgs := p.parseRecordBatch(message, version)
+		messages = append(messages, msgs...)
+	}
+	return messages
+}
+
+func (p *kafkaStream) parseFetchTopic(message *[]byte, version uint16) string {
 	if version < 12 {
 		topicName := p.parseString(message)
 		return topicName
@@ -226,16 +255,128 @@ func (p *kafkaStream) parseTopic(message *[]byte, version uint16) string {
 	}
 }
 
-func (p *kafkaStream) parseFetchRequest(message *[]byte, version uint16) (bool, bool, []string) {
+func (p *kafkaStream) parseProduceTopic(message *[]byte, version uint16) string {
+	if version <= 8 {
+		topicName := p.parseString(message)
+		return topicName
+	} else {
+		topicName := p.parseCompactString(message)
+		return topicName
+	}
+}
+
+func (p *kafkaStream) parseFetchRequest(message *[]byte, version uint16) (bool, bool) {
 	// Skip next 25 Bytes unnecessary information
 	p.currentOffset += 25
 
 	var topics []string
 	numberOfTopics := p.parseInt32(message)
 	for i := 0; i < int(numberOfTopics); i++ {
-		topic := p.parseTopicRequest(message, version)
+		topic := p.parseFetchTopicRequest(message, version)
 		topics = append(topics, topic)
 	}
+	p.message.topics = topics
 
-	return true, true, topics
+	return true, true
+}
+
+func (p *kafkaStream) parseProduceTopicRequest(message *[]byte, version uint16) (string, []string) {
+	topicName := p.parseProduceTopic(message, version)
+	messages := p.parseProduceRequestPartitions(message, version)
+
+	return topicName, messages
+}
+
+func (p *kafkaStream) parseProduceRequest(message *[]byte, version uint16) (bool, bool) {
+	if version > 3 {
+		p.parseString(message)
+	}
+
+	p.parseInt16(message)
+
+	p.parseInt32(message)
+	var topics []string
+	var messages []string
+
+	numberOfTopics := p.parseInt32(message)
+	for i := 0; i < int(numberOfTopics); i++ {
+		topic, msgs := p.parseProduceTopicRequest(message, version)
+		topics = append(topics, topic)
+		messages = append(messages, msgs...)
+	}
+
+	p.message.topics = topics
+	p.message.messages = messages
+
+	return true, true
+
+}
+
+func (p *kafkaStream) parseProducePartitionResponse(message *[]byte, version uint16) (bool, string) {
+	p.parseInt32(message)
+	var ec ErrorCode = ErrorCode(p.parseInt16(message))
+	var errorMessage string
+	var isError bool = false
+	if ec != 0 {
+		if ec == -1 {
+			errorMessage = "UNKNOWN_SERVER_ERROR"
+		}
+		errorMessage = ec.String()
+	}
+	p.parseInt64(message)
+	if version >= 2 {
+		p.parseInt64(message)
+		if version >= 5 {
+			p.parseInt64(message)
+		}
+		if version >= 8 {
+			numberOfRecordErrors := p.parseInt32(message)
+			for i := 0; i < int(numberOfRecordErrors); i++ {
+				p.parseInt32(message)
+				p.parseString(message)
+			}
+
+			if version == 9 {
+				p.parseCompactString(message)
+			} else {
+				p.parseString(message)
+			}
+		}
+	}
+
+	return isError, errorMessage
+}
+
+func (p *kafkaStream) parseProducePartitionsResponse(message *[]byte, version uint16) bool {
+	numberOfPartitions := p.parseInt32(message)
+
+	var errorMessages []string
+	var isErrorState bool = false
+
+	for i := 0; i < int(numberOfPartitions); i++ {
+		isError, errorMessage := p.parseProducePartitionResponse(message, version)
+		isErrorState = isErrorState || isError
+		errorMessages = append(errorMessages, errorMessage)
+	}
+	p.message.errorMessages = errorMessages
+	return !isErrorState
+}
+
+func (p *kafkaStream) parseProduceTopicResponse(message *[]byte, version uint16) bool {
+	p.parseProduceTopic(message, version)
+	return p.parseProducePartitionsResponse(message, version)
+}
+
+func (p *kafkaStream) parseProduceResponse(message *[]byte, version uint16) (bool, bool) {
+	numberOfTopics := p.parseInt32(message)
+	ok := true
+	complete := true
+
+	for i := 0; i < int(numberOfTopics); i++ {
+		ok = ok && p.parseProduceTopicResponse(message, version)
+	}
+
+	p.message.isError = !ok
+
+	return true, complete
 }
