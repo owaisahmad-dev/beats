@@ -34,7 +34,7 @@ type kafkaMessage struct {
 	apiVersion    uint16
 	correlationId uint32
 	size          uint32
-	clientId      uint16
+	clientId      string
 
 	isError bool
 
@@ -71,10 +71,18 @@ type kafkaPlugin struct {
 	transactions       map[uint32]*kafkaTransaction
 	transactionTimeout time.Duration
 
+	transactionMetadataStore map[uint32]*requestMetadata
+
 	results protos.Reporter
 	watcher procs.ProcessesWatcher
 
 	handleKafka func(kafka *kafkaPlugin, k *kafkaMessage, tcp *common.TCPTuple, dir uint8, raw_msg []byte)
+}
+
+type requestMetadata struct {
+	apiKey     uint16
+	apiVersion uint16
+	clientId   string
 }
 
 type kafkaPrivateData struct {
@@ -112,6 +120,7 @@ func (kafka *kafkaPlugin) init(results protos.Reporter, watcher procs.ProcessesW
 	kafka.handleKafka = handleKafkaMessage
 	kafka.results = results
 	kafka.watcher = watcher
+	kafka.transactionMetadataStore = make(map[uint32]*requestMetadata)
 
 	return nil
 }
@@ -145,8 +154,6 @@ func (kafka *kafkaPlugin) messageComplete(tcpTuple *common.TCPTuple, dir uint8, 
 	msg := stream.data[stream.message.start:stream.message.end]
 
 	kafka.handleKafka(kafka, stream.message, tcpTuple, dir, msg)
-
-	// TODO: prepare for new message
 }
 
 func (kafka *kafkaPlugin) Parse(pkt *protos.Packet, tcpTuple *common.TCPTuple, dir uint8, private protos.ProtocolData) protos.ProtocolData {
@@ -211,13 +218,16 @@ func (kafka *kafkaPlugin) kafkaMessageParser(s *kafkaStream) (bool, bool) {
 		logp.Debug("kafka_detailed", "parse_response: Incomplete message")
 		return true, false
 	}
+	s.message.size = uint32(lengthOfData)
 	msg := s.message
 	if s.isClient {
 
 		msg.apiKey = uint16(s.parseInt16(&s.data))
 		msg.apiVersion = uint16(s.parseInt16(&s.data))
 		msg.correlationId = uint32(s.parseInt32(&s.data))
-		msg.clientId = uint16(s.parseInt16(&s.data))
+		msg.clientId = s.parseString(&s.data)
+		msg.isRequest = true
+		kafka.transactionMetadataStore[msg.correlationId] = &requestMetadata{apiKey: msg.apiKey, apiVersion: msg.apiVersion, clientId: msg.clientId}
 
 		switch msg.apiKey {
 		case 0:
@@ -233,6 +243,14 @@ func (kafka *kafkaPlugin) kafkaMessageParser(s *kafkaStream) (bool, bool) {
 
 	} else {
 		msg.correlationId = uint32(s.parseInt32(&s.data))
+		reqMetadata := kafka.transactionMetadataStore[msg.correlationId]
+		if reqMetadata == nil {
+			return false, false
+		}
+		msg.apiKey = reqMetadata.apiKey
+		msg.apiVersion = reqMetadata.apiVersion
+		msg.clientId = reqMetadata.clientId
+
 		switch msg.apiKey {
 		case 0:
 			ok, complete := s.parseProduceResponse(&s.data, s.message.apiVersion)
@@ -256,6 +274,7 @@ func handleKafkaMessage(kafka *kafkaPlugin, m *kafkaMessage, tcpTuple *common.TC
 	if m.isRequest {
 		kafka.receivedKafkaRequest(m)
 	} else {
+		delete(kafka.transactionMetadataStore, m.correlationId)
 		kafka.receivedKafkaResponse(m)
 	}
 }
@@ -309,15 +328,12 @@ func (kafka *kafkaPlugin) receivedKafkaResponse(msg *kafkaMessage) {
 		unmatchedRequests.Add(1)
 		return
 	}
-
-	// TODO: fix me
 	trans.isError = msg.isError
 
 	if trans.isError {
 		trans.kafka["error_messages"] = msg.errorMessages
 	}
 
-	// TODO: fill the transaction.kafka with important data
 	if msg.apiKey == 1 {
 		// its the fetch request
 		trans.kafka["messages"] = msg.messages
