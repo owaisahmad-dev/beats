@@ -15,8 +15,8 @@ import (
 )
 
 var (
-	unmatchedRequests  = monitoring.NewInt(nil, "mssql.unmatched_requests")
-	unmatchedResponses = monitoring.NewInt(nil, "mssql.unmatched_responses")
+	unmatchedRequests  = monitoring.NewInt(nil, "kafka.unmatched_requests")
+	unmatchedResponses = monitoring.NewInt(nil, "kafka.unmatched_responses")
 )
 
 type kafkaMessage struct {
