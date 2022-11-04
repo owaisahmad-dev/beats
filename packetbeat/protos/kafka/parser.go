@@ -288,7 +288,7 @@ func (p *kafkaStream) parseProduceTopicRequest(message *[]byte, version uint16) 
 }
 
 func (p *kafkaStream) parseProduceRequest(message *[]byte, version uint16) (bool, bool) {
-	if version > 3 {
+	if version >= 3 {
 		p.parseString(message)
 	}
 
