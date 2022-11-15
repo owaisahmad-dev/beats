@@ -465,3 +465,66 @@ func TestKafkaParser_Produce_v3(t *testing.T) {
 		t.Error("Expecting a complete message")
 	}
 }
+
+func TestKafkaParser_Produce_v9(t *testing.T) {
+	kafka := kafkaModForTests(nil)
+
+	data := []byte(
+		"0000007a00000009000000070010636f" +
+			"6e736f6c652d70726f64756365720000" +
+			"ffff000005dc02057465737402000000" +
+			"004a00000000000000000000003dffff" +
+			"ffff02a0f791ce000000000000000001" +
+			"847b20276b000001847b20276b000000" +
+			"00000000000000000000010000000116" +
+			"000000010a68656c6c6f00000000")
+
+	message, err := hex.DecodeString(string(data))
+	if err != nil {
+		t.Error("Failed to decode hex string")
+	}
+
+	stream := &kafkaStream{data: message, message: new(kafkaMessage), isClient: true}
+
+	ok, complete := kafka.kafkaMessageParser(stream)
+
+	if !ok {
+		t.Error("Parsing returned error")
+	}
+	if !complete {
+		t.Error("Expecting a complete message")
+	}
+	if stream.message.topics[0] != "test" {
+		t.Error("Failed to parse topic")
+	}
+
+	if stream.message.messages[0] != "hello" {
+		t.Error("Failed to parse message")
+	}
+
+	if stream.message.size != 122 {
+		t.Errorf("Wrong message size %d", stream.message.size)
+	}
+
+	data = []byte(
+		"00000033000000070002057465737402" +
+			"0000000000000000000000000001ffff" +
+			"ffffffffffff00000000000000000100" +
+			"00000000000000")
+
+	message, err = hex.DecodeString(string(data))
+	if err != nil {
+		t.Error("Failed to decode hex string")
+	}
+
+	stream = &kafkaStream{data: message, message: new(kafkaMessage), isClient: false}
+
+	ok, complete = kafka.kafkaMessageParser(stream)
+
+	if !ok {
+		t.Error("Parsing returned error")
+	}
+	if !complete {
+		t.Error("Expecting a complete message")
+	}
+}

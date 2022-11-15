@@ -49,6 +49,7 @@ func (p *kafkaStream) parseUnsignedVarInt(bytes *[]byte) int64 {
 	}
 	p.currentOffset += n
 	return int64(varint)
+
 }
 
 func (p *kafkaStream) parseString(bytes *[]byte) string {
@@ -63,7 +64,10 @@ func (p *kafkaStream) parseString(bytes *[]byte) string {
 }
 
 func (p *kafkaStream) parseCompactString(bytes *[]byte) string {
-	topicNameSize := p.parseVarInt(bytes)
+	topicNameSize := p.parseUnsignedVarInt(bytes)
+	if topicNameSize == 0 {
+		return ""
+	}
 	topicNameSize -= 1
 	if topicNameSize < 0 {
 		panic("Invalid Var Int could not parse")
@@ -143,7 +147,7 @@ func (p *kafkaStream) parseFetchResponsePartitions(message *[]byte, version uint
 
 func (p *kafkaStream) parseRecordBatch(message *[]byte, version uint16) []string {
 	sizeOfRecordSets := 0
-	if version > 11 {
+	if (p.message.apiKey == 1 && version > 11) || (p.message.apiKey == 0 && version > 8) {
 		sizeOfRecordSets = int(p.parseUnsignedVarInt(message) - 1)
 	} else {
 		sizeOfRecordSets = int(p.parseInt32(message))
@@ -231,7 +235,12 @@ func (p *kafkaStream) skipFetchRequestPartitions(message *[]byte, version uint16
 }
 
 func (p *kafkaStream) parseProduceRequestPartitions(message *[]byte, version uint16) []string {
-	numberOfPartitions := p.parseInt32(message)
+	var numberOfPartitions uint32
+	if version == 9 {
+		numberOfPartitions = uint32(p.parseUnsignedVarInt(message)) - 1
+	} else {
+		numberOfPartitions = uint32(p.parseInt32(message))
+	}
 	var messages []string
 	for i := 0; i < int(numberOfPartitions); i++ {
 		p.parseInt32(message)
@@ -289,7 +298,13 @@ func (p *kafkaStream) parseProduceTopicRequest(message *[]byte, version uint16) 
 
 func (p *kafkaStream) parseProduceRequest(message *[]byte, version uint16) (bool, bool) {
 	if version >= 3 {
-		p.parseString(message)
+		if version == 9 {
+			p.parseCompactString(message)
+			// FIXME: SHOULD NOT NEED TO DO THIS...
+			p.currentOffset += 1
+		} else {
+			p.parseString(message)
+		}
 	}
 
 	p.parseInt16(message)
@@ -297,8 +312,13 @@ func (p *kafkaStream) parseProduceRequest(message *[]byte, version uint16) (bool
 	p.parseInt32(message)
 	var topics []string
 	var messages []string
+	var numberOfTopics int64
+	if version == 9 {
+		numberOfTopics = p.parseUnsignedVarInt(message) - 1
+	} else {
+		numberOfTopics = int64(p.parseInt32(message))
+	}
 
-	numberOfTopics := p.parseInt32(message)
 	for i := 0; i < int(numberOfTopics); i++ {
 		topic, msgs := p.parseProduceTopicRequest(message, version)
 		topics = append(topics, topic)
@@ -330,10 +350,20 @@ func (p *kafkaStream) parseProducePartitionResponse(message *[]byte, version uin
 			p.parseInt64(message)
 		}
 		if version >= 8 {
-			numberOfRecordErrors := p.parseInt32(message)
+			var numberOfRecordErrors int
+			if version > 8 {
+				numberOfRecordErrors = int(p.parseUnsignedVarInt(message)) - 1
+			} else {
+				numberOfRecordErrors = int(p.parseInt32(message))
+			}
+
 			for i := 0; i < int(numberOfRecordErrors); i++ {
 				p.parseInt32(message)
-				p.parseString(message)
+				if version == 9 {
+					p.parseCompactString(message)
+				} else {
+					p.parseString(message)
+				}
 			}
 
 			if version == 9 {
@@ -348,7 +378,12 @@ func (p *kafkaStream) parseProducePartitionResponse(message *[]byte, version uin
 }
 
 func (p *kafkaStream) parseProducePartitionsResponse(message *[]byte, version uint16) bool {
-	numberOfPartitions := p.parseInt32(message)
+	var numberOfPartitions int
+	if version > 8 {
+		numberOfPartitions = int(p.parseUnsignedVarInt(message) - 1)
+	} else {
+		numberOfPartitions = int(p.parseInt32(message))
+	}
 
 	var errorMessages []string
 	var isErrorState bool = false
@@ -357,6 +392,9 @@ func (p *kafkaStream) parseProducePartitionsResponse(message *[]byte, version ui
 		isError, errorMessage := p.parseProducePartitionResponse(message, version)
 		isErrorState = isErrorState || isError
 		errorMessages = append(errorMessages, errorMessage)
+		if version > 0 {
+			p.parseInt32(message)
+		}
 	}
 	p.message.errorMessages = errorMessages
 	return !isErrorState
@@ -368,7 +406,13 @@ func (p *kafkaStream) parseProduceTopicResponse(message *[]byte, version uint16)
 }
 
 func (p *kafkaStream) parseProduceResponse(message *[]byte, version uint16) (bool, bool) {
-	numberOfTopics := p.parseInt32(message)
+	var numberOfTopics int
+	if version > 8 {
+		// FIXME: This returns -1, wrong
+		numberOfTopics = int(p.parseUnsignedVarInt(message) - 1)
+	} else {
+		numberOfTopics = int(p.parseInt32(message))
+	}
 	ok := true
 	complete := true
 
