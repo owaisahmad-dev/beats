@@ -42,13 +42,13 @@ func (p *kafkaStream) parseVarInt(bytes *[]byte) int64 {
 	return int64(varint)
 }
 
-func (p *kafkaStream) parseUnsignedVarInt(bytes *[]byte) int64 {
+func (p *kafkaStream) parseUnsignedVarInt(bytes *[]byte) uint64 {
 	varint, n := binary.Uvarint((*bytes)[p.currentOffset:])
 	if n < 1 {
 		panic("Error parsing VAR INT")
 	}
 	p.currentOffset += n
-	return int64(varint)
+	return uint64(varint)
 
 }
 
@@ -65,7 +65,9 @@ func (p *kafkaStream) parseString(bytes *[]byte) string {
 
 func (p *kafkaStream) parseCompactString(bytes *[]byte) string {
 	topicNameSize := p.parseUnsignedVarInt(bytes)
+	// the field is null
 	if topicNameSize == 0 {
+		p.currentOffset += 1
 		return ""
 	}
 	topicNameSize -= 1
@@ -79,7 +81,7 @@ func (p *kafkaStream) parseCompactString(bytes *[]byte) string {
 }
 
 func (p *kafkaStream) parseUUID(bytes *[]byte) string {
-	parsedUUID, error := uuid.ParseBytes((*bytes)[p.currentOffset : p.currentOffset+16])
+	parsedUUID, error := uuid.FromBytes((*bytes)[p.currentOffset : p.currentOffset+16])
 	if error != nil {
 		panic(error)
 	}
@@ -107,9 +109,17 @@ func (p *kafkaStream) parseFetchResponse(message *[]byte, version uint16) (bool,
 		p.message.errorMessages = []string{errorMessage}
 	}
 
+	if version > 11 {
+		p.currentOffset += 1
+	}
 	var messages []string
 
-	numberOfResponses := p.parseInt32(message)
+	var numberOfResponses int
+	if version > 11 {
+		numberOfResponses = int(p.parseUnsignedVarInt(message) - 1)
+	} else {
+		numberOfResponses = int(p.parseInt32(message))
+	}
 
 	for i := 0; i < int(numberOfResponses); i++ {
 		messages = append(messages, p.parseFetchTopicResponse(message, version)...)
@@ -120,7 +130,12 @@ func (p *kafkaStream) parseFetchResponse(message *[]byte, version uint16) (bool,
 }
 
 func (p *kafkaStream) parseFetchResponsePartitions(message *[]byte, version uint16) []string {
-	numberOfPartitions := p.parseInt32(message)
+	var numberOfPartitions int
+	if version > 12 {
+		numberOfPartitions = int(p.parseUnsignedVarInt(message) - 1)
+	} else {
+		numberOfPartitions = int(p.parseInt32(message))
+	}
 	var messages []string
 	for i := 0; i < int(numberOfPartitions); i++ {
 		// SKIPPING UNNECESSARY BYTES START
@@ -131,7 +146,12 @@ func (p *kafkaStream) parseFetchResponsePartitions(message *[]byte, version uint
 			if version >= 5 {
 				p.currentOffset += 8
 			}
-			numberOfAbortedTransactions := p.parseInt32(message)
+			var numberOfAbortedTransactions int
+			if version > 11 {
+				numberOfAbortedTransactions = int(p.parseUnsignedVarInt(message))
+			} else {
+				numberOfAbortedTransactions = int(p.parseInt32(message))
+			}
 			for i := 0; i < int(numberOfAbortedTransactions); i++ {
 				p.currentOffset += 16
 			}
@@ -216,7 +236,12 @@ func (p *kafkaStream) parseFetchTopicRequest(message *[]byte, version uint16) st
 }
 
 func (p *kafkaStream) skipFetchRequestPartitions(message *[]byte, version uint16) {
-	numberOfPartitions := p.parseInt32(message)
+	var numberOfPartitions int
+	if version > 12 {
+		numberOfPartitions = int(p.parseUnsignedVarInt(message) - 1)
+	} else {
+		numberOfPartitions = int(p.parseInt32(message))
+	}
 
 	if version < 5 {
 		for j := 0; j < int(numberOfPartitions); j++ {
@@ -226,9 +251,13 @@ func (p *kafkaStream) skipFetchRequestPartitions(message *[]byte, version uint16
 		for j := 0; j < int(numberOfPartitions); j++ {
 			p.currentOffset += 20
 		}
-	} else {
+	} else if version < 11 {
 		for j := 0; j < int(numberOfPartitions); j++ {
 			p.currentOffset += 28
+		}
+	} else {
+		for j := 0; j < int(numberOfPartitions); j++ {
+			p.currentOffset += 32
 		}
 	}
 
@@ -278,8 +307,18 @@ func (p *kafkaStream) parseFetchRequest(message *[]byte, version uint16) (bool, 
 	// Skip next 25 Bytes unnecessary information
 	p.currentOffset += 25
 
+	if version > 12 {
+		// skip a byte (tagged section size)
+		p.currentOffset += 1
+	}
+
 	var topics []string
-	numberOfTopics := p.parseInt32(message)
+	var numberOfTopics int
+	if version > 12 {
+		numberOfTopics = int(p.parseUnsignedVarInt(message) - 1)
+	} else {
+		numberOfTopics = int(p.parseInt32(message))
+	}
 	for i := 0; i < int(numberOfTopics); i++ {
 		topic := p.parseFetchTopicRequest(message, version)
 		topics = append(topics, topic)
@@ -300,8 +339,6 @@ func (p *kafkaStream) parseProduceRequest(message *[]byte, version uint16) (bool
 	if version >= 3 {
 		if version == 9 {
 			p.parseCompactString(message)
-			// FIXME: SHOULD NOT NEED TO DO THIS...
-			p.currentOffset += 1
 		} else {
 			p.parseString(message)
 		}
@@ -312,11 +349,11 @@ func (p *kafkaStream) parseProduceRequest(message *[]byte, version uint16) (bool
 	p.parseInt32(message)
 	var topics []string
 	var messages []string
-	var numberOfTopics int64
+	var numberOfTopics uint64
 	if version == 9 {
 		numberOfTopics = p.parseUnsignedVarInt(message) - 1
 	} else {
-		numberOfTopics = int64(p.parseInt32(message))
+		numberOfTopics = uint64(p.parseInt32(message))
 	}
 
 	for i := 0; i < int(numberOfTopics); i++ {
@@ -408,7 +445,6 @@ func (p *kafkaStream) parseProduceTopicResponse(message *[]byte, version uint16)
 func (p *kafkaStream) parseProduceResponse(message *[]byte, version uint16) (bool, bool) {
 	var numberOfTopics int
 	if version > 8 {
-		// FIXME: This returns -1, wrong
 		numberOfTopics = int(p.parseUnsignedVarInt(message) - 1)
 	} else {
 		numberOfTopics = int(p.parseInt32(message))
