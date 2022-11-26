@@ -67,7 +67,6 @@ func (p *kafkaStream) parseCompactString(bytes *[]byte) string {
 	topicNameSize := p.parseUnsignedVarInt(bytes)
 	// the field is null
 	if topicNameSize == 0 {
-		p.currentOffset += 1
 		return ""
 	}
 	topicNameSize -= 1
@@ -287,6 +286,9 @@ func (p *kafkaStream) parseProduceRequestPartitions(message *[]byte, version uin
 		p.parseInt32(message)
 		msgs := p.parseRecordBatch(message, version)
 		messages = append(messages, msgs...)
+		if p.message.isFlexible {
+			p.parseTags(message)
+		}
 	}
 	return messages
 }
@@ -364,6 +366,9 @@ func (p *kafkaStream) parseProduceTopicRequest(message *[]byte, version uint16) 
 }
 
 func (p *kafkaStream) parseProduceRequest(message *[]byte, version uint16) (bool, bool) {
+	if p.message.isFlexible {
+		p.parseTags(message)
+	}
 	if version >= 3 {
 		if version == 9 {
 			p.parseCompactString(message)
@@ -388,6 +393,9 @@ func (p *kafkaStream) parseProduceRequest(message *[]byte, version uint16) (bool
 		topic, msgs := p.parseProduceTopicRequest(message, version)
 		topics = append(topics, topic)
 		messages = append(messages, msgs...)
+		if p.message.isFlexible {
+			p.parseTags(message)
+		}
 	}
 
 	p.message.topics = topics
@@ -460,6 +468,9 @@ func (p *kafkaStream) parseProducePartitionsResponse(message *[]byte, version ui
 		if version > 0 {
 			p.parseInt32(message)
 		}
+		if p.message.isFlexible {
+			p.parseTags(message)
+		}
 	}
 	p.message.errorMessages = errorMessages
 	return !isErrorState
@@ -471,6 +482,9 @@ func (p *kafkaStream) parseProduceTopicResponse(message *[]byte, version uint16)
 }
 
 func (p *kafkaStream) parseProduceResponse(message *[]byte, version uint16) (bool, bool) {
+	if p.message.isFlexible {
+		p.parseTags(message)
+	}
 	var numberOfTopics int
 	if version > 8 {
 		numberOfTopics = int(p.parseUnsignedVarInt(message) - 1)
@@ -482,6 +496,9 @@ func (p *kafkaStream) parseProduceResponse(message *[]byte, version uint16) (boo
 
 	for i := 0; i < int(numberOfTopics); i++ {
 		ok = ok && p.parseProduceTopicResponse(message, version)
+		if p.message.isFlexible {
+			p.parseTags(message)
+		}
 	}
 
 	p.message.isError = !ok
