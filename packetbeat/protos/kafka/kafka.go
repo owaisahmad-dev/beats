@@ -36,7 +36,8 @@ type kafkaMessage struct {
 	size          uint32
 	clientId      string
 
-	isError bool
+	isError    bool
+	isFlexible bool
 
 	topics        []string
 	messages      []string
@@ -212,6 +213,14 @@ func (kafka *kafkaPlugin) Parse(pkt *protos.Packet, tcpTuple *common.TCPTuple, d
 
 }
 
+func isFlexible(apiKey uint16, apiVersion uint16) bool {
+	if (apiKey == 0 && apiVersion >= 9) || (apiKey == 1 && apiVersion >= 12) {
+		return true
+	} else {
+		return false
+	}
+}
+
 func (kafka *kafkaPlugin) kafkaMessageParser(s *kafkaStream) (bool, bool) {
 	lengthOfData := s.parseInt32(&s.data)
 	if int(lengthOfData) > len(s.data) {
@@ -225,7 +234,9 @@ func (kafka *kafkaPlugin) kafkaMessageParser(s *kafkaStream) (bool, bool) {
 		msg.apiKey = uint16(s.parseInt16(&s.data))
 		msg.apiVersion = uint16(s.parseInt16(&s.data))
 		msg.correlationId = uint32(s.parseInt32(&s.data))
+		msg.isFlexible = isFlexible(msg.apiKey, msg.apiVersion)
 		msg.clientId = s.parseString(&s.data)
+
 		msg.isRequest = true
 		kafka.transactionMetadataStore[msg.correlationId] = &requestMetadata{apiKey: msg.apiKey, apiVersion: msg.apiVersion, clientId: msg.clientId}
 
@@ -249,6 +260,7 @@ func (kafka *kafkaPlugin) kafkaMessageParser(s *kafkaStream) (bool, bool) {
 		}
 		msg.apiKey = reqMetadata.apiKey
 		msg.apiVersion = reqMetadata.apiVersion
+		msg.isFlexible = isFlexible(msg.apiKey, msg.apiVersion)
 		msg.clientId = reqMetadata.clientId
 
 		switch msg.apiKey {
