@@ -332,12 +332,16 @@ func (p *kafkaStream) parseFetchRequest(message *[]byte, version uint16) (bool, 
 	if p.message.isFlexible {
 		p.parseTags(message)
 	}
-	p.currentOffset += 25
-
-	// if version > 12 {
-	// 	// skip a byte (tagged section size)
-	// 	p.currentOffset += 1
-	// }
+	p.currentOffset += 12
+	if version >= 3 {
+		p.currentOffset += 4
+		if version >= 4 {
+			p.currentOffset += 1
+			if version >= 7 {
+				p.currentOffset += 8
+			}
+		}
+	}
 
 	var topics []string
 	var numberOfTopics int
