@@ -143,32 +143,83 @@ func (p *kafkaStream) parseFetchResponsePartitions(message *[]byte, version uint
 		// SKIPPING UNNECESSARY BYTES START
 		p.currentOffset += 14
 
-		if version >= 4 {
+		if version <= 2 {
+			messageSize := p.parseInt32(message)
+			if messageSize > 0 {
+				messages = append(messages, p.parseMessageSet(message, version)...)
+			}
+		} else {
 			p.currentOffset += 8
-			if version >= 5 {
+			if version >= 4 {
 				p.currentOffset += 8
-			}
-			var numberOfAbortedTransactions int
-			if version > 11 {
-				numberOfAbortedTransactions = int(p.parseUnsignedVarInt(message))
-			} else {
-				numberOfAbortedTransactions = int(p.parseInt32(message))
-			}
-			for i := 0; i < int(numberOfAbortedTransactions); i++ {
-				p.currentOffset += 16
-				if p.message.isFlexible {
-					p.parseTags(message)
+				if version >= 5 {
+					p.currentOffset += 8
+				}
+				var numberOfAbortedTransactions int
+				if version > 11 {
+					numberOfAbortedTransactions = int(p.parseUnsignedVarInt(message))
+				} else {
+					numberOfAbortedTransactions = int(p.parseInt32(message))
+				}
+				for i := 0; i < int(numberOfAbortedTransactions); i++ {
+					p.currentOffset += 16
+					if p.message.isFlexible {
+						p.parseTags(message)
+					}
+				}
+				if version >= 11 {
+					p.currentOffset += 4
 				}
 			}
-			if version >= 11 {
-				p.currentOffset += 4
+			// SKIPPING UNNECESSARY BYTES END
+			messages = append(messages, p.parseRecordBatch(message, version)...)
+			if p.message.isFlexible {
+				p.parseTags(message)
 			}
 		}
-		// SKIPPING UNNECESSARY BYTES END
-		messages = append(messages, p.parseRecordBatch(message, version)...)
-		if p.message.isFlexible {
-			p.parseTags(message)
+
+	}
+	return messages
+}
+
+func (p *kafkaStream) parseMessageSet(message *[]byte, version uint16) []string {
+	p.parseInt64(message)
+	messageSize := p.parseInt32(message)
+
+	parsedMessageSize := 0
+	var messages []string
+	for parsedMessageSize < int(messageSize) {
+		startingOffset := p.currentOffset
+		p.parseInt32(message)
+
+		// skip magic byte
+		p.currentOffset += 1
+
+		//skip attributes byte
+		p.currentOffset += 1
+
+		// skip timestamp
+		p.parseInt64(message)
+
+		key := p.parseString(message)
+		if key != "" {
+			fmt.Println("\tRecord Value: ", key)
 		}
+		value := p.parseString(message)
+		if value != "" {
+			fmt.Println("\tRecord Value: ", value)
+			messages = append(messages, value)
+		} else {
+			parsedMessageSize += p.currentOffset - startingOffset
+			remainingSize := messageSize - int32(parsedMessageSize)
+			fmt.Println("Value: ", string((*message)[p.currentOffset:p.currentOffset+int(remainingSize)]))
+			p.currentOffset += int(remainingSize)
+			break
+		}
+
+	}
+	if parsedMessageSize > int(messageSize) {
+		panic("Incorrect Packet Data")
 	}
 	return messages
 }

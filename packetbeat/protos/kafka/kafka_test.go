@@ -605,3 +605,97 @@ func TestKafkaParser_Fetch_v13(t *testing.T) {
 
 	fmt.Println(stream.message.messages)
 }
+
+func TestKafkaParser_Fetch_v2(t *testing.T) {
+	kafka := kafkaModForTests(nil)
+
+	data := []byte(
+		"0000010e00010002000000010016636f" +
+			"6e736f6c652d636f6e73756d65722d39" +
+			"30373336ffffffff0000006400000001" +
+			"0000000100086d792d746f7069630000" +
+			"000d0000000500000000000000000010" +
+			"00000000000000000000000000000010" +
+			"00000000000700000000000000000010" +
+			"00000000000400000000000000000010" +
+			"00000000000c00000000000000000010" +
+			"00000000000600000000000000000010" +
+			"00000000000b00000000000000000010" +
+			"00000000000a00000000000000000010" +
+			"00000000000900000000000000000010" +
+			"00000000000200000000000000000010" +
+			"00000000000300000000000000000010" +
+			"00000000000100000000000000000010" +
+			"00000000000800000000000000000010" +
+			"0000")
+
+	message, err := hex.DecodeString(string(data))
+	if err != nil {
+		t.Error("Failed to decode hex string")
+	}
+
+	stream := &kafkaStream{data: message, message: new(kafkaMessage), isClient: true}
+
+	ok, complete := kafka.kafkaMessageParser(stream)
+
+	if !ok {
+		t.Error("Parsing returned error")
+	}
+	if !complete {
+		t.Error("Expecting a complete message")
+	}
+	if stream.message.topics[0] != "my-topic" {
+		t.Error("Failed to parse topic")
+	}
+
+	if stream.message.size != 270 {
+		t.Errorf("Wrong message size %d", stream.message.size)
+	}
+
+	data = []byte(
+		"000001ac000000010000000000000001" +
+			"00086d792d746f7069630000000d0000" +
+			"00000000000000000000000000000000" +
+			"00000005000000000000000000000000" +
+			"00000000000a00000000000000000001" +
+			"00000033000000000000000000000027" +
+			"c8edfbb10100000001850a6132aeffff" +
+			"ffff00000011796f207365636f6e6420" +
+			"617474656d7074000000010000000000" +
+			"00000000010000002600000000000000" +
+			"000000001a814048fd0100000001850a" +
+			"6330d0ffffffff000000047774686800" +
+			"00000600000000000000000000000000" +
+			"00000000090000000000000000000000" +
+			"00000000000002000000000000000000" +
+			"00000000000000000c00000000000000" +
+			"00000000000000000000070000000000" +
+			"00000000010000002800000000000000" +
+			"000000001c2b1da1cd0100000001850a" +
+			"5f48fcffffffff000000065774686868" +
+			"68000000030000000000000000000000" +
+			"0000000000000b000000000000000000" +
+			"00000000000000000800000000000000" +
+			"00000000000000000000040000000000" +
+			"00000000010000002700000000000000" +
+			"000000001b780ae5f00100000001850a" +
+			"5ec602ffffffff0000000548656c6c6f")
+
+	message, err = hex.DecodeString(string(data))
+	if err != nil {
+		t.Error("Failed to decode hex string")
+	}
+
+	stream = &kafkaStream{data: message, message: new(kafkaMessage), isClient: false}
+
+	ok, complete = kafka.kafkaMessageParser(stream)
+
+	if !ok {
+		t.Error("Parsing returned error")
+	}
+	if !complete {
+		t.Error("Expecting a complete message")
+	}
+
+	fmt.Println(stream.message.messages)
+}
