@@ -149,7 +149,6 @@ func (p *kafkaStream) parseFetchResponsePartitions(message *[]byte, version uint
 				messages = append(messages, p.parseMessageSet(message, version)...)
 			}
 		} else {
-			p.currentOffset += 8
 			if version >= 4 {
 				p.currentOffset += 8
 				if version >= 5 {
