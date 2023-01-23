@@ -13,6 +13,7 @@ type kafkaStream struct {
 	message       *kafkaMessage
 	data          []byte
 	isClient      bool
+	kafka         *kafkaPlugin
 }
 
 func (p *kafkaStream) parseInt32(bytes *[]byte) int32 {
@@ -353,6 +354,9 @@ func (p *kafkaStream) parseFetchTopic(message *[]byte, version uint16) string {
 		return topicName
 	} else {
 		parsedUUID := p.parseUUID(message)
+		if p.kafka.topicUUIDStore[parsedUUID] != "" {
+			return p.kafka.topicUUIDStore[parsedUUID]
+		}
 		return parsedUUID
 	}
 }
@@ -558,4 +562,73 @@ func (p *kafkaStream) parseProduceResponse(message *[]byte, version uint16) (boo
 	p.message.isError = !ok
 
 	return true, complete
+}
+
+func (p *kafkaStream) parseMetadataResponse(message *[]byte, version uint16) (bool, bool) {
+	if version < 10 {
+		p.message.errorMessages = append(p.message.errorMessages, "Unsupported version for metadata request")
+		return false, false
+	}
+	p.parseTags(message)
+
+	// throttle time
+	p.parseInt32(message)
+
+	var numberOfBrokers = int(p.parseUnsignedVarInt(message) - 1)
+	for i := 0; i < numberOfBrokers; i++ {
+		// node_id
+		p.parseInt32(message)
+		// host
+		p.parseCompactString(message)
+		// port
+		p.parseInt32(message)
+		// rack
+		p.parseCompactString(message)
+		// tags
+		p.parseTags(message)
+	}
+
+	// cluster id
+	p.parseCompactString(message)
+
+	// controller id
+	p.parseInt32(message)
+
+	var numberOfTopics = int(p.parseUnsignedVarInt(message) - 1)
+	for i := 0; i < numberOfTopics; i++ {
+		// error code
+		p.parseInt16(message)
+		topicName := p.parseCompactString(message)
+		topicId := p.parseUUID(message)
+
+		kafka := p.kafka
+		kafka.topicUUIDStore[topicId] = topicName
+
+		// is_internal
+		p.currentOffset += 1
+		var numberOfPartitions = int(p.parseUnsignedVarInt(message) - 1)
+		for j := 0; j < numberOfPartitions; j++ {
+			p.currentOffset += 14
+			numberOfReplicaNodes := int(p.parseUnsignedVarInt(message) - 1)
+			for z := 0; z < numberOfReplicaNodes; z++ {
+				p.parseInt32(message)
+			}
+
+			numberOfIsrNodes := int(p.parseUnsignedVarInt(message) - 1)
+			for z := 0; z < numberOfIsrNodes; z++ {
+				p.parseInt32(message)
+			}
+
+			numberOfOfflineNodes := int(p.parseUnsignedVarInt(message) - 1)
+			for z := 0; z < numberOfOfflineNodes; z++ {
+				p.parseInt32(message)
+			}
+			p.parseTags(message)
+		}
+		// topic authorized operations
+		p.parseInt32(message)
+		p.parseTags(message)
+	}
+
+	return true, true
 }

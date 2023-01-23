@@ -73,6 +73,7 @@ type kafkaPlugin struct {
 	transactionTimeout time.Duration
 
 	transactionMetadataStore map[uint32]*requestMetadata
+	topicUUIDStore           map[string]string
 
 	results protos.Reporter
 	watcher procs.ProcessesWatcher
@@ -122,6 +123,7 @@ func (kafka *kafkaPlugin) init(results protos.Reporter, watcher procs.ProcessesW
 	kafka.results = results
 	kafka.watcher = watcher
 	kafka.transactionMetadataStore = make(map[uint32]*requestMetadata)
+	kafka.topicUUIDStore = make(map[string]string)
 
 	return nil
 }
@@ -247,6 +249,9 @@ func (kafka *kafkaPlugin) kafkaMessageParser(s *kafkaStream) (bool, bool) {
 		case 1:
 			ok, complete := s.parseFetchRequest(&s.data, msg.apiVersion)
 			return ok, complete
+		// case 3:
+		// 	ok, complete := s.parseMetadataRequest(&s.data, msg.apiVersion)
+		// 	return ok, complete
 		default:
 			logp.Debug("kafka_detailed", "Kafka unknown message key = %d", msg.apiKey)
 			return false, false
@@ -269,6 +274,9 @@ func (kafka *kafkaPlugin) kafkaMessageParser(s *kafkaStream) (bool, bool) {
 			return ok, complete
 		case 1:
 			ok, complete := s.parseFetchResponse(&s.data, s.message.apiVersion)
+			return ok, complete
+		case 3:
+			ok, complete := s.parseMetadataResponse(&s.data, msg.apiVersion)
 			return ok, complete
 		default:
 			logp.Debug("kafka_detailed", "Kafka unknown message key = %d", msg.apiKey)
