@@ -22,7 +22,6 @@ package kafka
 
 import (
 	"encoding/hex"
-	"fmt"
 	"testing"
 
 	"github.com/elastic/beats/v7/libbeat/beat"
@@ -258,8 +257,6 @@ func TestKafkaParser_Fetch_v11(t *testing.T) {
 	if !complete {
 		t.Error("Expecting a complete message")
 	}
-
-	fmt.Println(stream.message.messages)
 }
 
 func TestKafkaParser_Produce_v5(t *testing.T) {
@@ -399,8 +396,6 @@ func TestKafkaParser_Fetch_v7(t *testing.T) {
 	if !complete {
 		t.Error("Expecting a complete message")
 	}
-
-	fmt.Println(stream.message.messages)
 }
 
 func TestKafkaParser_Produce_v3(t *testing.T) {
@@ -657,8 +652,6 @@ func TestKafkaParser_Fetch_v13(t *testing.T) {
 	if !complete {
 		t.Error("Expecting a complete message")
 	}
-
-	fmt.Println(stream.message.messages)
 }
 
 func TestKafkaParser_Fetch_v2(t *testing.T) {
@@ -751,8 +744,6 @@ func TestKafkaParser_Fetch_v2(t *testing.T) {
 	if !complete {
 		t.Error("Expecting a complete message")
 	}
-
-	fmt.Println(stream.message.messages)
 }
 
 func TestKafkaParser_Metadata_v12(t *testing.T) {

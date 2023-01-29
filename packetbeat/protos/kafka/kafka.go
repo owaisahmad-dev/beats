@@ -249,9 +249,6 @@ func (kafka *kafkaPlugin) kafkaMessageParser(s *kafkaStream) (bool, bool) {
 		case 1:
 			ok, complete := s.parseFetchRequest(&s.data, msg.apiVersion)
 			return ok, complete
-		// case 3:
-		// 	ok, complete := s.parseMetadataRequest(&s.data, msg.apiVersion)
-		// 	return ok, complete
 		default:
 			logp.Debug("kafka_detailed", "Kafka unknown message key = %d", msg.apiKey)
 			return false, false
