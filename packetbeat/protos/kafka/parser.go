@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"encoding/binary"
+	"errors"
 
 	"github.com/google/uuid"
 )
@@ -13,10 +14,6 @@ type kafkaStream struct {
 	data          []byte
 	isClient      bool
 	kafka         *kafkaPlugin
-}
-
-type errorStruct struct {
-	message string
 }
 
 func (p *kafkaStream) parseInt32(bytes *[]byte) int32 {
@@ -37,9 +34,9 @@ func (p *kafkaStream) parseInt16(bytes *[]byte) int16 {
 	return parsedValue
 }
 
-func (p *kafkaStream) parseVarInt(bytes *[]byte) (int64, *errorStruct) {
+func (p *kafkaStream) parseVarInt(bytes *[]byte) (int64, error) {
 	varint, n := binary.Varint((*bytes)[p.currentOffset:])
-	var err = &errorStruct{message: "Error parsing var int"}
+	var err = errors.New("Error parsing var int")
 	if n < 1 {
 		return -1, err
 	}
@@ -47,9 +44,9 @@ func (p *kafkaStream) parseVarInt(bytes *[]byte) (int64, *errorStruct) {
 	return int64(varint), nil
 }
 
-func (p *kafkaStream) parseUnsignedVarInt(bytes *[]byte) (uint64, *errorStruct) {
+func (p *kafkaStream) parseUnsignedVarInt(bytes *[]byte) (uint64, error) {
 	varint, n := binary.Uvarint((*bytes)[p.currentOffset:])
-	var err = &errorStruct{message: "Error parsing unsigned var int"}
+	var err = errors.New("Error parsing unsigned var int")
 	if n < 1 {
 		return 0, err
 	}
@@ -69,7 +66,7 @@ func (p *kafkaStream) parseString(bytes *[]byte) string {
 	return string(stringVal)
 }
 
-func (p *kafkaStream) parseCompactString(bytes *[]byte) (string, *errorStruct) {
+func (p *kafkaStream) parseCompactString(bytes *[]byte) (string, error) {
 	topicNameSize, err := p.parseUnsignedVarInt(bytes)
 	// the field is null
 	if topicNameSize == 0 {
@@ -85,10 +82,10 @@ func (p *kafkaStream) parseCompactString(bytes *[]byte) (string, *errorStruct) {
 	return topicName, nil
 }
 
-func (p *kafkaStream) parseUUID(bytes *[]byte) (string, *errorStruct) {
+func (p *kafkaStream) parseUUID(bytes *[]byte) (string, error) {
 	parsedUUID, err := uuid.FromBytes((*bytes)[p.currentOffset : p.currentOffset+16])
 	if err != nil {
-		return "", &errorStruct{message: "Could not parse UUID"}
+		return "", errors.New("Could not parse UUID")
 	}
 	p.currentOffset += 16
 	return parsedUUID.String(), nil
@@ -120,7 +117,7 @@ func (p *kafkaStream) parseFetchResponse(message *[]byte, version uint16) (bool,
 	var messages []string
 
 	var numberOfResponses uint64
-	var err *errorStruct
+	var err error
 	if version > 11 {
 		numberOfResponses, err = p.parseUnsignedVarInt(message)
 		numberOfResponses -= 1
@@ -129,7 +126,7 @@ func (p *kafkaStream) parseFetchResponse(message *[]byte, version uint16) (bool,
 	}
 
 	if err != nil {
-		p.message.errorMessages = append(p.message.errorMessages, err.message)
+		p.message.errorMessages = append(p.message.errorMessages, err.Error())
 		p.message.isError = true
 		return false, false
 	}
@@ -147,7 +144,7 @@ func (p *kafkaStream) parseFetchResponse(message *[]byte, version uint16) (bool,
 
 func (p *kafkaStream) parseFetchResponsePartitions(message *[]byte, version uint16) []string {
 	var numberOfPartitions uint64
-	var err *errorStruct
+	var err error
 	if version > 12 {
 		numberOfPartitions, err = p.parseUnsignedVarInt(message)
 		numberOfPartitions -= 1
@@ -155,7 +152,7 @@ func (p *kafkaStream) parseFetchResponsePartitions(message *[]byte, version uint
 		numberOfPartitions = uint64(p.parseInt32(message))
 	}
 	if err != nil {
-		p.message.errorMessages = append(p.message.errorMessages, err.message)
+		p.message.errorMessages = append(p.message.errorMessages, err.Error())
 		p.message.isError = true
 		return []string{}
 	}
@@ -170,7 +167,7 @@ func (p *kafkaStream) parseFetchResponsePartitions(message *[]byte, version uint
 				var newMessages []string
 				newMessages, err = p.parseMessageSet(message, version)
 				if err != nil {
-					p.message.errorMessages = append(p.message.errorMessages, err.message)
+					p.message.errorMessages = append(p.message.errorMessages, err.Error())
 					p.message.isError = true
 					break
 				}
@@ -187,7 +184,7 @@ func (p *kafkaStream) parseFetchResponsePartitions(message *[]byte, version uint
 					numberOfAbortedTransactions, err = p.parseUnsignedVarInt(message)
 					numberOfAbortedTransactions -= 1
 					if err != nil {
-						p.message.errorMessages = append(p.message.errorMessages, err.message)
+						p.message.errorMessages = append(p.message.errorMessages, err.Error())
 						break
 					}
 				} else {
@@ -219,7 +216,7 @@ func (p *kafkaStream) parseFetchResponsePartitions(message *[]byte, version uint
 	return messages
 }
 
-func (p *kafkaStream) parseMessageSet(message *[]byte, version uint16) ([]string, *errorStruct) {
+func (p *kafkaStream) parseMessageSet(message *[]byte, version uint16) ([]string, error) {
 	p.parseInt64(message)
 	messageSize := p.parseInt32(message)
 
@@ -252,19 +249,19 @@ func (p *kafkaStream) parseMessageSet(message *[]byte, version uint16) ([]string
 
 	}
 	if parsedMessageSize > int(messageSize) {
-		return messages, &errorStruct{message: "Incorrect packet data"}
+		return messages, errors.New("Incorrect packet data")
 	}
 	return messages, nil
 }
 
 func (p *kafkaStream) parseRecordBatch(message *[]byte, version uint16) []string {
 	var sizeOfRecordSets uint64
-	var err *errorStruct
+	var err error
 	if (p.message.apiKey == 1 && version > 11) || (p.message.apiKey == 0 && version > 8) {
 		sizeOfRecordSets, err = p.parseUnsignedVarInt(message)
 		sizeOfRecordSets -= 1
 		if err != nil {
-			p.message.errorMessages = append(p.message.errorMessages, err.message)
+			p.message.errorMessages = append(p.message.errorMessages, err.Error())
 			p.message.isError = true
 			return []string{}
 		}
@@ -287,7 +284,7 @@ func (p *kafkaStream) parseRecordBatch(message *[]byte, version uint16) []string
 			// "_" represents throwable values
 			_, err = p.parseVarInt(message)
 			if err != nil {
-				p.message.errorMessages = append(p.message.errorMessages, err.message)
+				p.message.errorMessages = append(p.message.errorMessages, err.Error())
 				p.message.isError = true
 				break
 			}
@@ -295,13 +292,13 @@ func (p *kafkaStream) parseRecordBatch(message *[]byte, version uint16) []string
 			p.currentOffset += 1
 			_, err = p.parseVarInt(message)
 			if err != nil {
-				p.message.errorMessages = append(p.message.errorMessages, err.message)
+				p.message.errorMessages = append(p.message.errorMessages, err.Error())
 				p.message.isError = true
 				break
 			}
 			_, err = p.parseVarInt(message)
 			if err != nil {
-				p.message.errorMessages = append(p.message.errorMessages, err.message)
+				p.message.errorMessages = append(p.message.errorMessages, err.Error())
 				p.message.isError = true
 				break
 			}
@@ -309,7 +306,7 @@ func (p *kafkaStream) parseRecordBatch(message *[]byte, version uint16) []string
 			var keyLength int64
 			keyLength, err = p.parseVarInt(message)
 			if err != nil {
-				p.message.errorMessages = append(p.message.errorMessages, err.message)
+				p.message.errorMessages = append(p.message.errorMessages, err.Error())
 				p.message.isError = true
 				break
 			}
@@ -320,7 +317,7 @@ func (p *kafkaStream) parseRecordBatch(message *[]byte, version uint16) []string
 			var valueLength int64
 			valueLength, err = p.parseVarInt(message)
 			if err != nil {
-				p.message.errorMessages = append(p.message.errorMessages, err.message)
+				p.message.errorMessages = append(p.message.errorMessages, err.Error())
 				p.message.isError = true
 				break
 			}
@@ -331,7 +328,7 @@ func (p *kafkaStream) parseRecordBatch(message *[]byte, version uint16) []string
 			var numberOfHeaders int64
 			numberOfHeaders, err = p.parseVarInt(message)
 			if err != nil {
-				p.message.errorMessages = append(p.message.errorMessages, err.message)
+				p.message.errorMessages = append(p.message.errorMessages, err.Error())
 				p.message.isError = true
 				break
 			}
@@ -339,7 +336,7 @@ func (p *kafkaStream) parseRecordBatch(message *[]byte, version uint16) []string
 				var lengthOfString int64
 				lengthOfString, err = p.parseVarInt(message)
 				if err != nil {
-					p.message.errorMessages = append(p.message.errorMessages, err.message)
+					p.message.errorMessages = append(p.message.errorMessages, err.Error())
 					p.message.isError = true
 					break
 				}
@@ -347,7 +344,7 @@ func (p *kafkaStream) parseRecordBatch(message *[]byte, version uint16) []string
 
 				lengthOfString, err = p.parseVarInt(message)
 				if err != nil {
-					p.message.errorMessages = append(p.message.errorMessages, err.message)
+					p.message.errorMessages = append(p.message.errorMessages, err.Error())
 					p.message.isError = true
 					break
 				}
@@ -389,7 +386,7 @@ func (p *kafkaStream) parseFetchTopicRequest(message *[]byte, version uint16) st
 
 func (p *kafkaStream) skipFetchRequestPartitions(message *[]byte, version uint16) {
 	var numberOfPartitions uint64
-	var err *errorStruct = nil
+	var err error = nil
 	if version > 12 {
 		numberOfPartitions, err = p.parseUnsignedVarInt(message)
 		numberOfPartitions -= 1
@@ -397,7 +394,7 @@ func (p *kafkaStream) skipFetchRequestPartitions(message *[]byte, version uint16
 		numberOfPartitions = uint64(p.parseInt32(message))
 	}
 	if err != nil {
-		p.message.errorMessages = append(p.message.errorMessages, err.message)
+		p.message.errorMessages = append(p.message.errorMessages, err.Error())
 		p.message.isError = true
 		return
 	}
@@ -427,7 +424,7 @@ func (p *kafkaStream) skipFetchRequestPartitions(message *[]byte, version uint16
 
 func (p *kafkaStream) parseProduceRequestPartitions(message *[]byte, version uint16) []string {
 	var numberOfPartitions uint64
-	var err *errorStruct
+	var err error
 	if version == 9 {
 		numberOfPartitions, err = p.parseUnsignedVarInt(message)
 		numberOfPartitions -= 1
@@ -435,7 +432,7 @@ func (p *kafkaStream) parseProduceRequestPartitions(message *[]byte, version uin
 		numberOfPartitions = uint64(p.parseInt32(message))
 	}
 	if err != nil {
-		p.message.errorMessages = append(p.message.errorMessages, err.message)
+		p.message.errorMessages = append(p.message.errorMessages, err.Error())
 		p.message.isError = true
 		return []string{}
 	}
@@ -462,7 +459,7 @@ func (p *kafkaStream) parseFetchTopic(message *[]byte, version uint16) string {
 	} else if version == 12 {
 		topicName, err := p.parseCompactString(message)
 		if err != nil {
-			p.message.errorMessages = append(p.message.errorMessages, err.message)
+			p.message.errorMessages = append(p.message.errorMessages, err.Error())
 			p.message.isError = true
 			return ""
 		}
@@ -470,7 +467,7 @@ func (p *kafkaStream) parseFetchTopic(message *[]byte, version uint16) string {
 	} else {
 		parsedUUID, err := p.parseUUID(message)
 		if err != nil {
-			p.message.errorMessages = append(p.message.errorMessages, err.message)
+			p.message.errorMessages = append(p.message.errorMessages, err.Error())
 			p.message.isError = true
 			return ""
 		}
@@ -488,7 +485,7 @@ func (p *kafkaStream) parseProduceTopic(message *[]byte, version uint16) string 
 	} else {
 		topicName, err := p.parseCompactString(message)
 		if err != nil {
-			p.message.errorMessages = append(p.message.errorMessages, err.message)
+			p.message.errorMessages = append(p.message.errorMessages, err.Error())
 			p.message.isError = true
 		}
 		return topicName
@@ -499,7 +496,7 @@ func (p *kafkaStream) parseTags(message *[]byte) {
 	taggedCount, err := p.parseUnsignedVarInt(message)
 	taggedCount -= 1
 	if err != nil {
-		p.message.errorMessages = append(p.message.errorMessages, err.message)
+		p.message.errorMessages = append(p.message.errorMessages, err.Error())
 		p.message.isError = true
 		return
 	}
@@ -507,7 +504,7 @@ func (p *kafkaStream) parseTags(message *[]byte) {
 		p.parseUnsignedVarInt(message) // tagID
 		size, err := p.parseUnsignedVarInt(message)
 		if err != nil {
-			p.message.errorMessages = append(p.message.errorMessages, err.message)
+			p.message.errorMessages = append(p.message.errorMessages, err.Error())
 			p.message.isError = true
 			break
 		}
@@ -533,7 +530,7 @@ func (p *kafkaStream) parseFetchRequest(message *[]byte, version uint16) (bool, 
 
 	var topics []string
 	var numberOfTopics uint64
-	var err *errorStruct
+	var err error
 	if version > 12 {
 		numberOfTopics, err = p.parseUnsignedVarInt(message)
 		numberOfTopics -= 1
@@ -541,7 +538,7 @@ func (p *kafkaStream) parseFetchRequest(message *[]byte, version uint16) (bool, 
 		numberOfTopics = uint64(p.parseInt32(message))
 	}
 	if err != nil {
-		p.message.errorMessages = append(p.message.errorMessages, err.message)
+		p.message.errorMessages = append(p.message.errorMessages, err.Error())
 		p.message.isError = true
 		return false, false
 	}
@@ -585,7 +582,7 @@ func (p *kafkaStream) parseProduceRequest(message *[]byte, version uint16) (bool
 	var topics []string
 	var messages []string
 	var numberOfTopics uint64
-	var err *errorStruct = nil
+	var err error = nil
 	if version == 9 {
 		numberOfTopics, err = p.parseUnsignedVarInt(message)
 		numberOfTopics -= 1
@@ -593,7 +590,7 @@ func (p *kafkaStream) parseProduceRequest(message *[]byte, version uint16) (bool
 		numberOfTopics = uint64(p.parseInt32(message))
 	}
 	if err != nil {
-		p.message.errorMessages = append(p.message.errorMessages, err.message)
+		p.message.errorMessages = append(p.message.errorMessages, err.Error())
 		return false, false
 	}
 	for i := 0; i < int(numberOfTopics); i++ {
@@ -634,7 +631,7 @@ func (p *kafkaStream) parseProducePartitionResponse(message *[]byte, version uin
 		}
 		if version >= 8 {
 			var numberOfRecordErrors uint64
-			var err *errorStruct
+			var err error
 			if version > 8 {
 				numberOfRecordErrors, err = p.parseUnsignedVarInt(message)
 				numberOfRecordErrors -= 1
@@ -642,9 +639,9 @@ func (p *kafkaStream) parseProducePartitionResponse(message *[]byte, version uin
 				numberOfRecordErrors = uint64(p.parseInt32(message))
 			}
 			if err != nil {
-				p.message.errorMessages = append(p.message.errorMessages, err.message)
+				p.message.errorMessages = append(p.message.errorMessages, err.Error())
 				p.message.isError = true
-				return true, err.message
+				return true, err.Error()
 			}
 
 			for i := 0; i < int(numberOfRecordErrors); i++ {
@@ -669,7 +666,7 @@ func (p *kafkaStream) parseProducePartitionResponse(message *[]byte, version uin
 
 func (p *kafkaStream) parseProducePartitionsResponse(message *[]byte, version uint16) bool {
 	var numberOfPartitions uint64
-	var err *errorStruct
+	var err error
 	if version > 8 {
 		numberOfPartitions, err = p.parseUnsignedVarInt(message)
 		numberOfPartitions -= 1
@@ -678,7 +675,7 @@ func (p *kafkaStream) parseProducePartitionsResponse(message *[]byte, version ui
 	}
 
 	if err != nil {
-		p.message.errorMessages = append(p.message.errorMessages, err.message)
+		p.message.errorMessages = append(p.message.errorMessages, err.Error())
 		p.message.isError = true
 		return false
 	}
@@ -711,14 +708,14 @@ func (p *kafkaStream) parseProduceResponse(message *[]byte, version uint16) (boo
 		p.parseTags(message)
 	}
 	var numberOfTopics uint64
-	var err *errorStruct
+	var err error
 	if version > 8 {
 		numberOfTopics, err = p.parseUnsignedVarInt(message)
 	} else {
 		numberOfTopics = uint64(p.parseInt32(message))
 	}
 	if err != nil {
-		p.message.errorMessages = append(p.message.errorMessages, err.message)
+		p.message.errorMessages = append(p.message.errorMessages, err.Error())
 		p.message.isError = true
 		return false, false
 	}
@@ -754,7 +751,7 @@ func (p *kafkaStream) parseMetadataResponse(message *[]byte, version uint16) (bo
 	numberOfBrokers -= 1
 
 	if err != nil {
-		p.message.errorMessages = append(p.message.errorMessages, err.message)
+		p.message.errorMessages = append(p.message.errorMessages, err.Error())
 		p.message.isError = true
 		return false, false
 	}
@@ -781,23 +778,23 @@ func (p *kafkaStream) parseMetadataResponse(message *[]byte, version uint16) (bo
 	numberOfTopics, err = p.parseUnsignedVarInt(message)
 	numberOfTopics -= 1
 	if err != nil {
-		p.message.errorMessages = append(p.message.errorMessages, err.message)
+		p.message.errorMessages = append(p.message.errorMessages, err.Error())
 		p.message.isError = true
 		return false, false
 	}
 	for i := 0; i < int(numberOfTopics); i++ {
 		// error code
 		p.parseInt16(message)
-		var err *errorStruct
+		var err error
 		topicName, err := p.parseCompactString(message)
 		if err != nil {
-			p.message.errorMessages = append(p.message.errorMessages, err.message)
+			p.message.errorMessages = append(p.message.errorMessages, err.Error())
 			p.message.isError = true
 			break
 		}
 		topicId, err := p.parseUUID(message)
 		if err != nil {
-			p.message.errorMessages = append(p.message.errorMessages, err.message)
+			p.message.errorMessages = append(p.message.errorMessages, err.Error())
 			p.message.isError = true
 			break
 		}
@@ -811,7 +808,7 @@ func (p *kafkaStream) parseMetadataResponse(message *[]byte, version uint16) (bo
 		numberOfPartitions, err = p.parseUnsignedVarInt(message)
 		numberOfPartitions -= 1
 		if err != nil {
-			p.message.errorMessages = append(p.message.errorMessages, err.message)
+			p.message.errorMessages = append(p.message.errorMessages, err.Error())
 			p.message.isError = true
 			break
 		}
@@ -820,7 +817,7 @@ func (p *kafkaStream) parseMetadataResponse(message *[]byte, version uint16) (bo
 			numberOfReplicaNodes, err := p.parseUnsignedVarInt(message)
 			numberOfReplicaNodes -= 1
 			if err != nil {
-				p.message.errorMessages = append(p.message.errorMessages, err.message)
+				p.message.errorMessages = append(p.message.errorMessages, err.Error())
 				p.message.isError = true
 				break
 			}
@@ -832,7 +829,7 @@ func (p *kafkaStream) parseMetadataResponse(message *[]byte, version uint16) (bo
 			numberOfIsrNodes, err := p.parseUnsignedVarInt(message)
 			numberOfIsrNodes -= 1
 			if err != nil {
-				p.message.errorMessages = append(p.message.errorMessages, err.message)
+				p.message.errorMessages = append(p.message.errorMessages, err.Error())
 				p.message.isError = true
 				break
 			}
@@ -843,7 +840,7 @@ func (p *kafkaStream) parseMetadataResponse(message *[]byte, version uint16) (bo
 			numberOfOfflineNodes, err := p.parseUnsignedVarInt(message)
 			numberOfOfflineNodes -= 1
 			if err != nil {
-				p.message.errorMessages = append(p.message.errorMessages, err.message)
+				p.message.errorMessages = append(p.message.errorMessages, err.Error())
 				p.message.isError = true
 				break
 			}
